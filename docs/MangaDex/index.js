@@ -463,7 +463,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MangaDex = exports.MangaDexInfo = void 0;
 const types_1 = require("@paperback/types");
 exports.MangaDexInfo = {
-    version: '1.4.0',
+    version: '1.6.0',
     name: 'MangaDex',
     icon: 'icon.png',
     author: 'Cusa9227',
@@ -479,8 +479,8 @@ class MangaDex extends types_1.Source {
         this.apiUrl = 'https://api.mangadex.org';
         this.cdnUrl = 'https://uploads.mangadex.org';
         this.requestManager = App.createRequestManager({
-            requestsPerSecond: 4,
-            requestTimeout: 15000,
+            requestsPerSecond: 2,
+            requestTimeout: 20000,
         });
     }
     async fetchJson(url) {
@@ -557,21 +557,33 @@ class MangaDex extends types_1.Source {
         const limit = 500;
         let chapters = [];
         let hasMore = true;
+        const seen = new Set();
         while (hasMore) {
             const data = await this.fetchJson(`${this.apiUrl}/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}`);
-            const results = data.data.map((ch) => {
+            const results = [];
+            for (const ch of data.data) {
                 const attrs = ch.attributes;
-                return App.createChapter({
+                const chapterKey = `${attrs.chapter}-${attrs.title}`;
+                if (seen.has(chapterKey)) {
+                    continue;
+                }
+                seen.add(chapterKey);
+                results.push(App.createChapter({
                     id: ch.id,
                     name: attrs.title ||
-                        `Chapter ${attrs.chapter}`,
-                    chapNum: parseFloat(attrs.chapter ?? '0'),
+                        (attrs.chapter
+                            ? `Chapter ${attrs.chapter}`
+                            : 'Oneshot'),
+                    chapNum: attrs.chapter &&
+                        !isNaN(Number(attrs.chapter))
+                        ? Number(attrs.chapter)
+                        : 0,
                     langCode: 'gb',
                     time: attrs.publishAt
                         ? new Date(attrs.publishAt)
                         : undefined,
-                });
-            });
+                }));
+            }
             chapters.push(...results);
             offset += limit;
             hasMore = data.data.length === limit;
@@ -580,6 +592,12 @@ class MangaDex extends types_1.Source {
     }
     async getChapterDetails(mangaId, chapterId) {
         const data = await this.fetchJson(`${this.apiUrl}/at-home/server/${chapterId}`);
+        if (!data ||
+            !data.chapter ||
+            !data.chapter.hash ||
+            !Array.isArray(data.chapter.data)) {
+            throw new Error('Failed to load chapter pages from MangaDex.');
+        }
         const baseUrl = data.baseUrl;
         const hash = data.chapter.hash;
         const pages = data.chapter.data.map((file) => `${baseUrl}/data/${hash}/${file}`);
@@ -590,7 +608,8 @@ class MangaDex extends types_1.Source {
         });
     }
     async getSearchResults(query, _metadata) {
-        const title = encodeURIComponent((query.title ?? '').trim());
+        const rawTitle = (query.title ?? '').trim();
+        const title = encodeURIComponent(rawTitle);
         const data = await this.fetchJson(`${this.apiUrl}/manga?title=${title}&includes[]=cover_art&limit=20&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`);
         const tiles = data.data.map((manga) => {
             const coverFile = manga.relationships.find((r) => r.type === 'cover_art')?.attributes?.fileName || '';
