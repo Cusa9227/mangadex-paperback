@@ -463,7 +463,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MangaDex = exports.MangaDexInfo = void 0;
 const types_1 = require("@paperback/types");
 exports.MangaDexInfo = {
-    version: '1.1.0',
+    version: '1.4.0',
     name: 'MangaDex',
     icon: 'icon.png',
     author: 'Cusa9227',
@@ -494,7 +494,12 @@ class MangaDex extends types_1.Source {
             },
         });
         const response = await this.requestManager.schedule(request, 1);
-        return JSON.parse(response.data);
+        try {
+            return JSON.parse(response.data);
+        }
+        catch {
+            throw new Error('Failed to parse MangaDex response');
+        }
     }
     async getMangaDetails(mangaId) {
         const data = await this.fetchJson(`${this.apiUrl}/manga/${mangaId}?includes[]=author&includes[]=cover_art`);
@@ -505,9 +510,21 @@ class MangaDex extends types_1.Source {
         const desc = attrs.description?.en ||
             Object.values(attrs.description ?? {})[0] ||
             '';
-        const status = attrs.status === 'ongoing'
-            ? 'Ongoing'
-            : 'Completed';
+        let status = 'Unknown';
+        switch (attrs.status) {
+            case 'ongoing':
+                status = 'Ongoing';
+                break;
+            case 'completed':
+                status = 'Completed';
+                break;
+            case 'hiatus':
+                status = 'Hiatus';
+                break;
+            case 'cancelled':
+                status = 'Cancelled';
+                break;
+        }
         const author = data.data.relationships.find((r) => r.type === 'author')?.attributes?.name || '';
         const coverFile = data.data.relationships.find((r) => r.type === 'cover_art')?.attributes?.fileName || '';
         const image = coverFile
@@ -536,20 +553,30 @@ class MangaDex extends types_1.Source {
         });
     }
     async getChapters(mangaId) {
-        const data = await this.fetchJson(`${this.apiUrl}/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=500`);
-        return data.data.reverse().map((ch) => {
-            const attrs = ch.attributes;
-            return App.createChapter({
-                id: ch.id,
-                name: attrs.title ||
-                    `Chapter ${attrs.chapter}`,
-                chapNum: parseFloat(attrs.chapter ?? '0'),
-                langCode: 'gb',
-                time: attrs.publishAt
-                    ? new Date(attrs.publishAt)
-                    : undefined,
+        let offset = 0;
+        const limit = 500;
+        let chapters = [];
+        let hasMore = true;
+        while (hasMore) {
+            const data = await this.fetchJson(`${this.apiUrl}/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}`);
+            const results = data.data.map((ch) => {
+                const attrs = ch.attributes;
+                return App.createChapter({
+                    id: ch.id,
+                    name: attrs.title ||
+                        `Chapter ${attrs.chapter}`,
+                    chapNum: parseFloat(attrs.chapter ?? '0'),
+                    langCode: 'gb',
+                    time: attrs.publishAt
+                        ? new Date(attrs.publishAt)
+                        : undefined,
+                });
             });
-        });
+            chapters.push(...results);
+            offset += limit;
+            hasMore = data.data.length === limit;
+        }
+        return chapters;
     }
     async getChapterDetails(mangaId, chapterId) {
         const data = await this.fetchJson(`${this.apiUrl}/at-home/server/${chapterId}`);
@@ -563,7 +590,7 @@ class MangaDex extends types_1.Source {
         });
     }
     async getSearchResults(query, _metadata) {
-        const title = encodeURIComponent(query.title ?? '');
+        const title = encodeURIComponent((query.title ?? '').trim());
         const data = await this.fetchJson(`${this.apiUrl}/manga?title=${title}&includes[]=cover_art&limit=20&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`);
         const tiles = data.data.map((manga) => {
             const coverFile = manga.relationships.find((r) => r.type === 'cover_art')?.attributes?.fileName || '';
